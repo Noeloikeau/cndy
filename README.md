@@ -1,8 +1,8 @@
-# CNDY: Complex Network Dynamics Framework
+# CNDY: Complex Network Dynamics
 
 ## Overview
 
-CNDY (Complex Network Dynamics) is a Python framework for simulating and analyzing complex network dynamics with support for conditional Just-In-Time (JIT) compilation via Numba for high-performance computing. It supports:
+CNDY (Complex Network Dynamics) is a Python framework for simulating and analyzing dynamical complex networks with support for conditional Just-In-Time (JIT) compilation via Numba for high-performance computing. It supports:
 
 - Configurable node and edge functions
 - Time delays in signal propagation
