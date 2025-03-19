@@ -1,4 +1,8 @@
 """
+Author: Noeloikeau Charlot
+Date: 3/18/2025
+Version: 0.1
+
 Complex Network Dynamics (CNDY) Simulation Framework.
 
 This module provides a framework for simulating complex network dynamics with
