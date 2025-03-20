@@ -16,6 +16,7 @@ CNDY is a Python framework for simulating and analyzing dynamical complex networ
 
 - `conditional_jit`: A decorator that conditionally applies Numba's JIT compilation
 - `dispatcher`: Creates a dispatcher function that selects between multiple functions based on an ID
+- `differential` : Computes derivatives along arbitrary parameters and indices of any function
 
 ### 2. Node Functions
 
