@@ -1,8 +1,4 @@
 """
-Author: Noeloikeau Charlot
-Date: 3/18/2025
-Version: 0.1
-
 Complex Network Dynamics (CNDY) Simulation Framework.
 
 This module provides a framework for simulating complex network dynamics with
@@ -14,12 +10,14 @@ import numpy as np
 import numba
 from numba import njit
 import matplotlib.pyplot as plt
+import inspect
+from typing import Callable, Any, Dict, Tuple, Union, List, Optional
 
 
 # ---------- GLOBALS & META-FUNCTIONS ----------
 
 # Global JIT configuration
-USE_JIT = True
+USE_JIT = False
 PARALLEL = False
 CACHE = False
 
@@ -160,9 +158,197 @@ def dispatcher(functions, atleast_2d=True, cache=True):
     dispatcher_func = local_vars[dispatcher_name]
             
     # Add dispatcher bindings
-    dispatcher_func.bindings = {id: func for id, func in func_dict.items()}
+    dispatcher_func.bindings = func_dict
     
     return dispatcher_func
+
+def differential(function: Callable, 
+                 param_name: Union[str, List[str]], 
+                 *args, 
+                 index: Union[None, int, Tuple, List] = None, 
+                 value: Union[Any, List[Any]] = 1e-5, 
+                 eval: bool = True,
+                 operation: Callable[[Any, Any], Any] = lambda parameter, value: parameter + value,
+                 **kwargs) -> Union[Tuple[Any, Any], Any]:
+    """
+    Computes a function and its perturbation with respect to one or more named parameters.
+    
+    This function provides the core functionality for numerical differentiation by
+    evaluating a function with original parameters and with one or more parameters perturbed.
+    
+    Args:
+        function: The function to evaluate
+        param_name: Name(s) of the parameter(s) to perturb (string or list of strings)
+        *args: Positional arguments for the function
+        index: Index/indices for parameters to perturb. Can be:
+               - None: Perturb entire parameter
+               - int/tuple: Single index for all parameters
+               - List: List of indices, one per parameter
+        value: The perturbation value(s). Can be a single value or list of values (one per parameter)
+        eval: Whether to evaluate the unperturbed function (default: True)
+              If True, returns (perturbed_result, original_result)
+              If False, returns (perturbed_result, None)
+        operation: Function that defines how the perturbation is applied (default: addition)
+                  Takes two arguments (parameter, value) and returns the perturbed parameter
+        **kwargs: Keyword arguments for the function
+        
+    Returns:
+        Union[Tuple[Any, Any], Any]: If eval=True, returns (perturbed_result, original_result)
+                                     If eval=False, returns (perturbed_result, None)
+
+    Example:
+        test = lambda x,y,a=1: x*y+a**2
+        N = 10
+        x = 2*np.ones(N)
+        y = 3*np.ones(N)
+        a = np.atleast_2d(np.ones(N))
+        # Simple case with one parameter
+        value = 1e-5
+        index = (0, 0)
+        u, v = differential(test, 'a', x, y, a=a, index=index, value=value)
+        print(f'Differentiating x*y+a**2 wrt "a":\n {(u-v)/1e-5},\n u = {u},\n v = {v}')
+
+        # Multiple parameters with different indices
+        u, v = differential(test, ['x','a'], 
+                        2*np.ones(10), 3*np.ones(10), 
+                        a=np.atleast_2d(np.ones(10)), 
+                        index=[(0,), (0,0)], #or try (Ellipsis, 0) etc.
+                        value=[1e-5, 1e-6], eval=True)
+    """
+    # Get function signature
+    signature = inspect.signature(function)
+    parameters = signature.parameters
+    
+    # Create a combined argument dictionary for easier processing
+    arg_dict = {}
+    
+    # Add positional arguments
+    for i, arg in enumerate(args):
+        if i < len(parameters):
+            param_name_i = list(parameters.keys())[i]
+            arg_dict[param_name_i] = arg
+    
+    # Add keyword arguments
+    arg_dict.update(kwargs)
+    
+    # Convert param_name to list if it's a single string
+    if isinstance(param_name, str):
+        param_names = [param_name]
+    else:
+        param_names = param_name
+        
+    # Process values
+    if not isinstance(value, list):
+        values = [value] * len(param_names)
+    else:
+        values = value
+        if len(values) != len(param_names):
+            raise ValueError(f"Number of values ({len(values)}) must match number of parameters ({len(param_names)})")
+    
+    # Process indices
+    if index is None:
+        indices = [None] * len(param_names)
+    elif isinstance(index, (int, tuple)):
+        # Single index for all parameters
+        indices = [index] * len(param_names)
+    elif isinstance(index, list):
+        # List of indices, one per parameter
+        indices = index
+        if len(indices) != len(param_names):
+            raise ValueError(f"Number of indices ({len(indices)}) must match number of parameters ({len(param_names)})")
+    else:
+        raise TypeError(f"Unsupported index type: {type(index)}")
+    
+    # Find parameter positions and values
+    param_info = []
+    for i, p_name in enumerate(param_names):
+        # Find parameter position
+        param_index = None
+        for j, signature_param in enumerate(parameters.keys()):
+            if signature_param == p_name:
+                param_index = j
+                break
+        
+        if param_index is None:
+            raise ValueError(f"Parameter '{p_name}' not found in function signature")
+        
+        # Determine if parameter is positional in the current call
+        is_positional = param_index is not None and param_index < len(args)
+        
+        # Get the parameter value
+        if is_positional:
+            param_value = args[param_index]
+        elif p_name in kwargs:
+            param_value = kwargs[p_name]
+        else:
+            param_info_obj = parameters.get(p_name)
+            if param_info_obj and param_info_obj.default is not inspect.Parameter.empty:
+                param_value = param_info_obj.default
+            else:
+                raise ValueError(f"No value provided for parameter '{p_name}' and no default exists")
+        
+        # Ensure param_value is numpy array for consistent handling
+        if not isinstance(param_value, np.ndarray):
+            if np.isscalar(param_value):
+                param_value = np.array([param_value])
+            else:
+                param_value = np.array(param_value)
+        
+        param_info.append({
+            'name': p_name,
+            'index': param_index,
+            'is_positional': is_positional,
+            'value': param_value,
+            'perturb_index': indices[i],
+            'perturb_value': values[i]
+        })
+    
+    # Create arguments for original function call
+    original_args = list(args)
+    original_kwargs = dict(kwargs)
+    
+    # Create arguments for perturbed function call
+    perturbed_args = list(args)
+    perturbed_kwargs = dict(kwargs)
+    
+    # Apply perturbations for each parameter
+    for info in param_info:
+        # Create perturbed parameter value
+        perturbed_value = info['value'].copy()
+        
+        # Apply perturbation based on index and the provided operation
+        if info['perturb_index'] is None:
+            # Perturb entire parameter
+            perturbed_value = operation(perturbed_value, info['perturb_value'])
+        elif isinstance(info['perturb_index'], int):
+            # Perturb at specific index (single dimension)
+            perturbed_value[info['perturb_index']] = operation(
+                perturbed_value[info['perturb_index']], 
+                info['perturb_value']
+            )
+        else:
+            # Perturb at specific index (multi-dimensional)
+            perturbed_value[info['perturb_index']] = operation(
+                perturbed_value[info['perturb_index']], 
+                info['perturb_value']
+            )
+        
+        # Update the appropriate argument for the perturbed call
+        if info['is_positional']:
+            perturbed_args[info['index']] = perturbed_value
+        else:
+            perturbed_kwargs[info['name']] = perturbed_value
+    
+    # Evaluate functions based on the eval parameter
+    if eval:
+        # Call both original and perturbed functions
+        original_result = function(*original_args, **original_kwargs)
+        perturbed_result = function(*perturbed_args, **perturbed_kwargs)
+        return perturbed_result, original_result
+    else:
+        # Only call the perturbed function
+        perturbed_result = function(*perturbed_args, **perturbed_kwargs)
+        return perturbed_result, None
 
 
 # ---------- INITIAL CONDITION ----------
@@ -412,8 +598,11 @@ def network_dynamics(
         for edge_index in range(len(edge_data)):
             target_node = int(edge_data[edge_index, 1])
             in_degree[target_node] += 1
-            
+        
+        # Loop over nodes with parallelization if enabled
         for n in conditional_range(N):
+            # Ensure index matches node label
+            n = int(node_data[n, 0])
             # Get node's previous state and initialize inputs
             previous_state = net_history[t-1, n]
             node_inputs = np.zeros((in_degree[n], M))
@@ -866,6 +1055,9 @@ def plot_net(
         
         figs.append(fig)
         axes.append(ax)
+
+        plt.show()
+        plt.clf()
     
     if M == 1:
         return figs[0], axes[0]
@@ -943,6 +1135,27 @@ def simple_test(cm='hsv'):
         edge_dispatcher, 
         cm=cm
     )
+
+    # Differentiate the network dynamics
+    value = 1e-5
+    index = (0, 1, 0) # perturb the initial condition of the first node
+    u,v = differential(network_dynamics,'net_history', 
+                    initial_history, 
+                    node_data_array, 
+                    edge_data_array, 
+                    node_dispatcher, edge_dispatcher,
+                    index = index, value=value)
+    # Rescale useful for time-delays where we don't divide by value
+    #rescale = lambda x: (x - x.min()) / (x.max() - x.min())
+    #u = rescale(u)
+    #v = rescale(v)
+    d = (v-u)/value#rescale(v-u)
+    for n in range(6):
+        plt.plot(u[:,n,0], label=f'Node {n}')
+        plt.plot(v[:,n,0], label=f'Node {n} perturbed')
+        plt.plot(d[:,n,0], label=f'Node {n} difference')
+        plt.legend()
+        plt.show()
     
     # Return local variables for inspection
     return locals()
@@ -1086,4 +1299,3 @@ if __name__ == "__main__":
     print("Running spiking test...")
     spiking_test_result = spiking_test()
     
-    plt.show()
